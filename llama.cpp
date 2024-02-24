@@ -1643,6 +1643,7 @@ struct llama_cparams {
     bool mul_mat_q;
     bool offload_kqv;
     bool do_pooling;
+    bool causal_attn;
 
     ggml_backend_sched_eval_callback cb_eval;
     void * cb_eval_user_data;
@@ -7716,7 +7717,7 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
                 for (int i = 0; i < n_kv; ++i) {
                     float f;
                     if (!lctx.kv_self.cells[i].has_seq_id(seq_id) ||
-                        (hparams.causal_attn && lctx.kv_self.cells[i].pos > pos)) {
+                        (cparams.causal_attn && lctx.kv_self.cells[i].pos > pos)) {
                         f = -INFINITY;
                     } else {
                         f = 0;
@@ -11370,6 +11371,7 @@ struct llama_context_params llama_context_default_params() {
         /*.embedding                   =*/ false,
         /*.offload_kqv                 =*/ true,
         /*.do_pooling                  =*/ true,
+        /*.causal_attn                 =*/ -1,
     };
 
     return result;
@@ -11528,6 +11530,7 @@ struct llama_context * llama_new_context_with_model(
     cparams.mul_mat_q        = params.mul_mat_q;
     cparams.offload_kqv      = params.offload_kqv;
     cparams.do_pooling       = params.do_pooling;
+    cparams.causal_attn      = (params.causal_attn < 0) ? hparams.causal_attn : (params.causal_attn == 1);
 
     cparams.n_ctx            = params.n_ctx           == 0    ? hparams.n_ctx_train           : params.n_ctx;
     cparams.rope_freq_base   = params.rope_freq_base  == 0.0f ? hparams.rope_freq_base_train  : params.rope_freq_base;

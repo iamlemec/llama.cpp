@@ -245,6 +245,7 @@ extern "C" {
         bool embedding;   // embedding mode only
         bool offload_kqv; // whether to offload the KQV ops (including the KV cache) to GPU
         bool do_pooling;  // whether to pool (sum) embedding results by sequence id (ignored if no pooling layer)
+        int32_t causal_attn;  // -1: use model default, 0: no causal attention, 1: causal attention
     };
 
     // model quantization parameters
