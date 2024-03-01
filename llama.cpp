@@ -7772,8 +7772,14 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
 
                 for (int i = 0; i < n_kv; ++i) {
                     float f;
-                    if (!lctx.kv_self.cells[i].has_seq_id(seq_id) ||
-                        (hparams.causal_attn && lctx.kv_self.cells[i].pos > pos)) {
+                    if (
+                        ( hparams.causal_attn && (
+                            !lctx.kv_self.cells[i].has_seq_id(seq_id) || lctx.kv_self.cells[i].pos > pos)
+                        ) ||
+                        (!hparams.causal_attn && (
+                            i >= n_tokens || batch.seq_id[i][0] != seq_id)
+                        )
+                    ) {
                         f = -INFINITY;
                     } else {
                         f = 0;
