@@ -3,7 +3,6 @@
 
 #include <string>
 #include <vector>
-#include <format>
 
 static float dot_product(const std::vector<float>& v1, const std::vector<float>& v2) {
     float dot = 0.0f;
@@ -21,7 +20,7 @@ static float cosine_similarity(const std::vector<float>& v1, const std::vector<f
     return dot_product(v1, v2) / (norm(v1) * norm(v2));
 }
 
-static void normalize(std::vector<float> in, float* out) {
+static void normalize(const std::vector<float>& in, float* out) {
     float inorm = norm(in);
     for (uint64_t i = 0; i < in.size(); i++) {
         out[i] = in[i] / inorm;
@@ -32,9 +31,10 @@ static std::vector<std::vector<float>> encode(llama_context* ctx, const std::vec
     auto result = std::vector<std::vector<float>>{};
 
     auto mdl = llama_get_model(ctx);
+    auto batch = llama_batch_init(llama_n_batch(ctx), 0, 1);
 
     for (uint64_t i = 0; i < sentences.size(); i++) {
-        auto batch = llama_batch_init(llama_n_batch(ctx), 0, 1);
+        llama_batch_clear(batch);
 
         // testing with and without EOS - unexpected embeddings in both cases - GritLM seems to have EOS = ""
         std::string input_string = instruction + sentences[i];
@@ -44,7 +44,7 @@ static std::vector<std::vector<float>> encode(llama_context* ctx, const std::vec
 
         // we want to ignore instruction tokens for mean pooling
         auto inputs_instruct = llama_tokenize(mdl, instruction, true, false);
-        int n_inst = inputs_instruct.size();
+        int n_inst = (int)inputs_instruct.size();
 
 		/*/
         // debug tokens - these are matching as referenced in their sample so doesn't appear to be a token issue
@@ -56,7 +56,7 @@ static std::vector<std::vector<float>> encode(llama_context* ctx, const std::vec
 
         // add input to batch (this increments n_tokens)
         for (uint64_t j = 0; j < inputs.size(); j++) {
-            llama_batch_add(batch, inputs[j], j, { 0 }, false);
+            llama_batch_add(batch, inputs[j], (llama_pos)j, { 0 }, false);
         }
 
         // clear previous kv_cache values (irrelevant for embeddings)
@@ -66,7 +66,7 @@ static std::vector<std::vector<float>> encode(llama_context* ctx, const std::vec
         llama_decode(ctx, batch);
 
         // get embedding dimensions
-        int n_toks = inputs.size();
+        int n_toks = (int)inputs.size();
         int n_embd = llama_n_embd(mdl);
 
         // allocate embedding output
@@ -98,9 +98,9 @@ static std::vector<std::vector<float>> encode(llama_context* ctx, const std::vec
         }
         std::printf("\n");
 		*/
-
-        llama_batch_free(batch);
     }
+
+    llama_batch_free(batch);
 
     return result;
 }
@@ -131,7 +131,6 @@ int main(int argc, char* argv[])
 
     auto mdl = llama_load_model_from_file(params.model.c_str(), mparams);
     auto ctx = llama_new_context_with_model(mdl, cparams);
-    auto bat = llama_batch_init(llama_n_ctx(ctx), 0, 1);
 
     // ### Embedding/Representation ### taken sample from here:
     // https://github.com/ContextualAI/gritlm?tab=readme-ov-file#basic
@@ -167,7 +166,6 @@ int main(int argc, char* argv[])
         std::printf("Cosine similarity between \"%.50s\" and \"%.50s\" is: %.3f\n", queries[1].c_str(), documents[1].c_str(), cosine_sim_q1_d1);
     }
 
-    llama_batch_free(bat);
     llama_free(ctx);
     llama_free_model(mdl);
     llama_backend_free();
