@@ -1683,6 +1683,7 @@ struct llama_cparams {
     float defrag_thold;
 
     bool offload_kqv;
+    bool causal_attn;
     enum llama_pooling_type pooling_type;
 
     ggml_backend_sched_eval_callback cb_eval;
@@ -7996,7 +7997,7 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
                 for (int i = 0; i < n_kv; ++i) {
                     float f;
                     if (!lctx.kv_self.cells[i].has_seq_id(seq_id) ||
-                        (hparams.causal_attn && lctx.kv_self.cells[i].pos > pos)) {
+                        (cparams.causal_attn && lctx.kv_self.cells[i].pos > pos)) {
                         f = -INFINITY;
                     } else {
                         f = 0;
@@ -12017,6 +12018,7 @@ struct llama_context * llama_new_context_with_model(
     cparams.defrag_thold     = params.defrag_thold;
     cparams.offload_kqv      = params.offload_kqv;
     cparams.pooling_type     = params.pooling_type;
+    cparams.causal_attn      = !params.embedding;
 
     cparams.n_ctx            = params.n_ctx           == 0    ? hparams.n_ctx_train           : params.n_ctx;
     cparams.rope_freq_base   = params.rope_freq_base  == 0.0f ? hparams.rope_freq_base_train  : params.rope_freq_base;
