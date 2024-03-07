@@ -3,7 +3,6 @@
 
 #include <string>
 #include <vector>
-#include <format>
 
 static float dot_product(const std::vector<float>& v1, const std::vector<float>& v2) {
     float dot = 0.0f;
@@ -105,6 +104,59 @@ static std::vector<std::vector<float>> encode(llama_context* ctx, const std::vec
     return result;
 }
 
+static std::vector<std::string> generate(llama_context* ctx, const std::string& prompt) {
+    auto result = std::vector<std::string>();
+    auto mdl = llama_get_model(ctx);
+    auto bat = llama_batch_init(llama_n_batch(ctx), 0, 1);
+
+    auto inputs = llama_tokenize(mdl, prompt, false, true);
+
+    // debug tokens
+    //std::for_each(inputs.begin(), inputs.end(), [&ctx](llama_token t) { std::printf("[%d:%s]", t, llama_token_to_piece(ctx, t).c_str()); });
+    //std::printf("\n");
+
+    auto ct = 0;
+
+    while (true) {
+        llama_batch_clear(bat);
+
+        for (auto i = 0; i < inputs.size(); i++)
+            llama_batch_add(bat, inputs[i], ct++, { 0 }, i == inputs.size() - 1);
+
+        inputs.clear();
+
+        llama_decode(ctx, bat);
+
+        auto logits = llama_get_logits_ith(ctx, bat.n_tokens - 1);
+
+        auto candidates = std::vector<llama_token_data>(llama_n_vocab(mdl));
+        for (auto token = 0; token < candidates.size(); token++)
+            candidates[token] = llama_token_data{ token, logits[token], 0.0f };
+
+        auto candidates_p = llama_token_data_array{ candidates.data(), candidates.size(), false };
+
+        //auto token = llama_sample_token_greedy(ctx, &candidates_p);
+
+        llama_sample_top_k(ctx, &candidates_p, 40, 1);
+        llama_sample_top_p(ctx, &candidates_p, 0.9f, 1);
+        llama_sample_temp(ctx, &candidates_p, 0.8f);
+        auto token = llama_sample_token(ctx, &candidates_p);
+
+        if (token == llama_token_eos(mdl))
+            break;
+
+        auto piece = llama_token_to_piece(ctx, token);
+        std::printf("%s", piece.c_str());
+
+        result.push_back(piece);
+        inputs.push_back(token);
+    }
+
+    llama_batch_free(bat);
+
+    return result;
+}
+
 // ./gritlm -m ggml-gritlm-7b-q8_0.gguf -ngl 99
 int main(int argc, char* argv[])
 {
@@ -130,12 +182,12 @@ int main(int argc, char* argv[])
     auto mdl = llama_load_model_from_file(params.model.c_str(), mparams);
     auto ctx = llama_new_context_with_model(mdl, cparams);
 
-    // set to embedding mode
-    llama_set_embeddings(ctx, true);
-
     // ### Embedding/Representation ### taken sample from here:
     // https://github.com/ContextualAI/gritlm?tab=readme-ov-file#basic
     {
+        // set to embedding mode
+        llama_set_embeddings(ctx, true);
+
         std::string instruction = "Given a scientific paper title, retrieve the paper's abstract";
 
         std::vector<std::string> queries = {
@@ -156,6 +208,27 @@ int main(int argc, char* argv[])
         auto d_rep = encode(ctx, documents, gritlm_instruction(""));
         auto q_rep = encode(ctx, queries, gritlm_instruction(instruction));
 
+        {
+            // Reference Embeddings:
+            // d_rep[0]=[-0.01093883 -0.00207192  0.00238518  0.01663752 -0.01506504 -0.00407287]...[-0.00271351 -0.06481306 -0.01666098 -0.01541271 -0.00865726 -0.01416175]
+            // d_rep[1]=[-0.00650452  0.00212615 -0.02645572 -0.00419536  0.00244047  0.00839157]...[ 0.01504037 -0.01797983 -0.01416037 -0.01154874  0.00109705  0.00701276]
+            // q_rep[0]=[-0.0116082   0.00087169 -0.00105727  0.00590176 -0.00704495 -0.00616626]...[-0.00591899 -0.09296951 -0.01614498  0.00303799  0.01136393 -0.00551387]
+            // q_rep[1]=[ 0.00314259  0.00963412 -0.01534408 -0.01369498  0.00694336  0.01369928]...[ 0.0168539  -0.00753189  0.00091483  0.0131447   0.01471299 -0.00752845]
+
+            auto print = [](const std::vector<float>& vec, const std::string& name, const int n = 6) {
+                std::printf("%s=[", name.c_str());
+                std::for_each(vec.begin(), vec.begin() + n, [](float x) { std::printf("%s%.8f ", x < 0.0f ? "" : " ", x); });
+                std::printf("\b]...[");
+                std::for_each(vec.end() - n, vec.end(), [](float x) { std::printf("%s%.8f ", x < 0.0f ? "" : " ", x); });
+                std::printf("\b]\n");
+            };
+
+            print(d_rep[0], "d_rep[0]");
+            print(d_rep[1], "d_rep[1]");
+            print(q_rep[0], "q_rep[0]");
+            print(q_rep[1], "q_rep[1]");
+        }
+
         auto cosine_sim_q0_d0 = cosine_similarity(q_rep[0], d_rep[0]);
         auto cosine_sim_q0_d1 = cosine_similarity(q_rep[0], d_rep[1]);
         auto cosine_sim_q1_d0 = cosine_similarity(q_rep[1], d_rep[0]);
@@ -165,6 +238,18 @@ int main(int argc, char* argv[])
         std::printf("Cosine similarity between \"%.50s\" and \"%.50s\" is: %.3f\n", queries[0].c_str(), documents[1].c_str(), cosine_sim_q0_d1);
         std::printf("Cosine similarity between \"%.50s\" and \"%.50s\" is: %.3f\n", queries[1].c_str(), documents[0].c_str(), cosine_sim_q1_d0);
         std::printf("Cosine similarity between \"%.50s\" and \"%.50s\" is: %.3f\n", queries[1].c_str(), documents[1].c_str(), cosine_sim_q1_d1);
+    }
+
+    // ### Generation ###
+    // # We did not finetune GritLM models with system prompts, as you can just include system-like instructions together with your user instruction
+    {
+        // set to causal mode
+        llama_set_embeddings(ctx, false);
+
+        std::printf("generate: n_ctx = %d, n_batch = %d, n_predict = %d, n_keep = %d\n", params.n_ctx, params.n_batch, params.n_predict, params.n_keep);
+
+        const auto prompt = "<|user|>\nPlease write me a poem about my recent hike of Mt. Fuji at midnight in the style of Shakespeare.\n<|assistant|>\n";
+        auto response = generate(ctx, prompt);
     }
 
     llama_free(ctx);
