@@ -2600,6 +2600,138 @@ class NomicBertModel(BertModel):
         self.gguf_writer.add_rope_freq_base(self.hparams["rotary_emb_base"])
 
 
+@Model.register("XLMRobertaModel")
+class XLMRoberrtaModel(BertModel):
+    model_arch = gguf.MODEL_ARCH.BERT
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.pad_token_id = self.hparams["pad_token_id"]
+
+    def set_gguf_parameters(self):
+        # set this and pop it so super doesn't write it too
+        context_length_train = self.hparams.pop("max_position_embeddings")
+        context_length = context_length_train - self.pad_token_id - 1 # since padding_idx=1
+        self.gguf_writer.add_context_length(context_length)
+
+        super().set_gguf_parameters()
+
+    def set_vocab(self):
+        from sentencepiece import SentencePieceProcessor
+
+        tokenizer_path = self.dir_model / 'sentencepiece.bpe.model'
+
+        tokens: list[bytes] = []
+        scores: list[float] = []
+        toktypes: list[int] = []
+
+        if not tokenizer_path.is_file():
+            raise FileNotFoundError(f"File not found: {tokenizer_path}")
+
+        tokenizer = SentencePieceProcessor(str(tokenizer_path))
+        vocab_size = self.hparams.get('vocab_size', tokenizer.vocab_size())
+
+        for token_id in range(tokenizer.vocab_size()):
+            piece = tokenizer.id_to_piece(token_id)
+            text = piece.encode("utf-8")
+            score = tokenizer.get_score(token_id)
+
+            toktype = SentencePieceTokenTypes.NORMAL
+            if tokenizer.is_unknown(token_id):
+                toktype = SentencePieceTokenTypes.UNKNOWN
+            elif tokenizer.is_control(token_id):
+                toktype = SentencePieceTokenTypes.CONTROL
+            elif tokenizer.is_unused(token_id):
+                toktype = SentencePieceTokenTypes.UNUSED
+            elif tokenizer.is_byte(token_id):
+                toktype = SentencePieceTokenTypes.BYTE
+
+            tokens.append(text)
+            scores.append(score)
+            toktypes.append(toktype)
+
+        added_tokens_file = self.dir_model / 'added_tokens.json'
+        if added_tokens_file.is_file():
+            with open(added_tokens_file, "r", encoding="utf-8") as f:
+                added_tokens_json = json.load(f)
+
+                for key in added_tokens_json:
+                    key = key.encode("utf-8")
+                    if key not in tokens:
+                        tokens.append(key)
+                        scores.append(-1000.0)
+                        toktypes.append(SentencePieceTokenTypes.USER_DEFINED)
+
+        if vocab_size > len(tokens):
+            pad_count = vocab_size - len(tokens)
+            print(
+                f"Padding vocab with {pad_count} token(s) - [PAD1] through [PAD{pad_count}]"
+            )
+            for i in range(1, pad_count + 1):
+                tokens.append(f"[PAD{i}]")
+                scores.append(-1000.0)
+                toktypes.append(SentencePieceTokenTypes.UNUSED)
+
+        # realign tokens
+        tokens = ['<s>', '<pad>', '</s>', '<unk>'] + tokens[3:-1]
+        scores = [0.0, -10000.0, 0.0, -10000.0] + scores[3:-1]
+        toktypes = [3, 3, 3, 2] + toktypes[3:-1]
+
+        assert len(tokens) == vocab_size
+
+        self.gguf_writer.add_tokenizer_model("bert")
+        self.gguf_writer.add_token_list(tokens)
+        self.gguf_writer.add_token_scores(scores)
+        self.gguf_writer.add_token_types(toktypes)
+        self.gguf_writer.add_token_type_count(1)
+
+        special_vocab = gguf.SpecialVocab(self.dir_model, n_vocab=len(tokens))
+        special_vocab.add_to_gguf(self.gguf_writer)
+
+    def write_tensors(self):
+        tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+        tensors = dict(self.get_tensors())
+        for name, data_torch in tensors.items():
+            # we are only using BERT for embeddings so we don't need the pooling layer
+            if name in ("embeddings.position_ids", "pooler.dense.weight", "pooler.dense.bias"):
+                continue  # we don't need these
+
+            # map tensor names
+            new_name = tensor_map.get_name(name, try_suffixes=(".weight", ".bias"))
+            if new_name is None:
+                raise ValueError(f"Can not map tensor {name!r}")
+
+            # chop off position embeddings by two to handle padding_idx offset (1 + padding_token_id)
+            if name == "embeddings.position_embeddings.weight":
+                context_chop = self.pad_token_id + 1
+                data_torch = data_torch[context_chop:]
+
+            # convert any unsupported data types to float32
+            if data_torch.dtype not in (torch.float16, torch.float32):
+                data_torch = data_torch.to(torch.float32)
+
+            data = data_torch.squeeze().numpy()
+            n_dims = len(data.shape)
+            new_dtype: type[np.floating[Any]]
+
+            if (
+                self.ftype == 1 and name.endswith(".weight") and n_dims == 2
+                and name != "embeddings.token_type_embeddings.weight"  # not used with get_rows, must be F32
+            ):
+                # if f16 desired, convert any float32 2-dim weight tensors to float16
+                new_dtype = np.float16
+            else:
+                # if f32 desired, convert any float16 to float32
+                new_dtype = np.float32
+
+            logger.info(f"{new_name}, n_dims = {n_dims}, {data_torch.dtype} --> {new_dtype}")
+
+            if data.dtype != new_dtype:
+                data = data.astype(new_dtype)
+
+            self.gguf_writer.add_tensor(new_name, data)
+
+
 @Model.register("GemmaForCausalLM")
 class GemmaModel(Model):
     model_arch = gguf.MODEL_ARCH.GEMMA
