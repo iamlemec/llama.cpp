@@ -2668,18 +2668,18 @@ class XLMRoberrtaModel(BertModel):
                 f"Padding vocab with {pad_count} token(s) - [PAD1] through [PAD{pad_count}]"
             )
             for i in range(1, pad_count + 1):
-                tokens.append(f"[PAD{i}]")
+                tokens.append(f"[PAD{i}]".encode("utf-8"))
                 scores.append(-1000.0)
                 toktypes.append(SentencePieceTokenTypes.UNUSED)
 
         # realign tokens
-        tokens = ['<s>', '<pad>', '</s>', '<unk>'] + tokens[3:-1]
+        tokens = [b'<s>', b'<pad>', b'</s>', b'<unk>'] + tokens[3:-1]
         scores = [0.0, -10000.0, 0.0, -10000.0] + scores[3:-1]
         toktypes = [3, 3, 3, 2] + toktypes[3:-1]
 
         assert len(tokens) == vocab_size
 
-        self.gguf_writer.add_tokenizer_model("bert")
+        self.gguf_writer.add_tokenizer_model("gpt2")
         self.gguf_writer.add_token_list(tokens)
         self.gguf_writer.add_token_scores(scores)
         self.gguf_writer.add_token_types(toktypes)
@@ -2687,6 +2687,21 @@ class XLMRoberrtaModel(BertModel):
 
         special_vocab = gguf.SpecialVocab(self.dir_model, n_vocab=len(tokens))
         special_vocab.add_to_gguf(self.gguf_writer)
+
+        # we need to get merges from the sentencepiece model
+        merges = []
+        stoks = set(tokens)
+        for piece_id, piece in enumerate(tokens):
+            spiece = piece.decode("utf-8")
+            for i in range(len(spiece)):
+                piece_l = spiece[:i].encode("utf-8")
+                piece_r = spiece[i:].encode("utf-8")
+                if piece_l in stoks and piece_r in stoks:
+                    merges.append((piece_l, piece_r, piece_id))
+        merges = [
+            val[0] + b' ' + val[1] for val in sorted(merges, key=lambda val: val[2])
+        ]
+        self.gguf_writer.add_token_merges(merges)
 
     def write_tensors(self):
         tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
