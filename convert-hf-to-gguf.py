@@ -2679,7 +2679,7 @@ class XLMRoberrtaModel(BertModel):
 
         assert len(tokens) == vocab_size
 
-        self.gguf_writer.add_tokenizer_model("gpt2")
+        self.gguf_writer.add_tokenizer_model("llama")
         self.gguf_writer.add_token_list(tokens)
         self.gguf_writer.add_token_scores(scores)
         self.gguf_writer.add_token_types(toktypes)
