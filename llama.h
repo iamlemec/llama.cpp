@@ -158,6 +158,7 @@ extern "C" {
         LLAMA_POOLING_TYPE_NONE = 0,
         LLAMA_POOLING_TYPE_MEAN = 1,
         LLAMA_POOLING_TYPE_CLS  = 2,
+        LLAMA_POOLING_TYPE_LAST = 3,
     };
 
     enum llama_split_mode {

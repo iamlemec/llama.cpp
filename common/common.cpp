@@ -529,6 +529,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         /**/ if (value == "none") { params.pooling_type = LLAMA_POOLING_TYPE_NONE; }
         else if (value == "mean") { params.pooling_type = LLAMA_POOLING_TYPE_MEAN; }
         else if (value == "cls") { params.pooling_type = LLAMA_POOLING_TYPE_CLS; }
+        else if (value == "last") { params.pooling_type = LLAMA_POOLING_TYPE_LAST; }
         else { invalid_param = true; }
         return true;
     }
@@ -1518,7 +1519,7 @@ void gpt_print_usage(int /*argc*/, char ** argv, const gpt_params & params) {
     printf("  --yarn-attn-factor N  YaRN: scale sqrt(t) or attention magnitude (default: 1.0)\n");
     printf("  --yarn-beta-slow N    YaRN: high correction dim or alpha (default: %.1f)\n", params.yarn_beta_slow);
     printf("  --yarn-beta-fast N    YaRN: low correction dim or beta (default: %.1f)\n", params.yarn_beta_fast);
-    printf("  --pooling {none,mean,cls}\n");
+    printf("  --pooling {none,mean,cls,last}\n");
     printf("                        pooling type for embeddings, use model default if unspecified\n");
     printf("  -dt N, --defrag-thold N\n");
     printf("                        KV cache defragmentation threshold (default: %.1f, < 0 - disabled)\n", params.defrag_thold);

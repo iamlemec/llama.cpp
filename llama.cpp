@@ -8738,6 +8738,9 @@ struct llm_build_context {
         // inp_pos - contains the positions
         struct ggml_tensor * inp_pos = build_inp_pos();
 
+        // inp_cls - contains the CLS/SEP token
+        struct ggml_tensor * inp_cls  = build_inp_cls();
+
         // KQ_mask (mask for 1 head, it will be broadcasted to all heads)
         struct ggml_tensor * KQ_mask = build_inp_KQ_mask();
 
@@ -8825,9 +8828,15 @@ struct llm_build_context {
                 LLM_NORM_RMS, cb, -1);
         cb(cur, "result_norm", -1);
 
-        // lm_head
-        cur = ggml_mul_mat(ctx0, model.output, cur);
-        cb(cur, "result_output", -1);
+        if (cparams.embeddings) {
+            // pooling layer
+            cur = ggml_get_rows(ctx0, cur, inp_cls);
+            cb(cur, "result_embd_pooled", -1);
+        } else {
+            // lm_head
+            cur = ggml_mul_mat(ctx0, model.output, cur);
+            cb(cur, "result_output", -1);
+        }
 
         ggml_build_forward_expand(gf, cur);
 
@@ -11011,6 +11020,38 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
         }
     }
 
+    if (cparams.pooling_type == LLAMA_POOLING_TYPE_LAST) {
+        const int64_t n_tokens = batch.n_tokens;
+
+        GGML_ASSERT(lctx.inp_cls);
+        GGML_ASSERT(ggml_backend_buffer_is_host(lctx.inp_cls->buffer));
+
+        uint32_t * data = (uint32_t *) lctx.inp_cls->data;
+        memset(lctx.inp_cls->data, 0, n_tokens * ggml_element_size(lctx.inp_cls));
+
+        std::vector<int> last_pos(n_tokens, -1);
+        std::vector<int> last_row(n_tokens, -1);
+
+        for (int i = 0; i < n_tokens; ++i) {
+            const llama_seq_id seq_id = batch.seq_id[i][0];
+            const llama_pos    pos    = batch.pos[i];
+
+            GGML_ASSERT(seq_id < n_tokens && "seq_id cannot be larger than n_tokens with pooling_type == LAST");
+
+            if (pos >= last_pos[seq_id]) {
+                last_pos[seq_id] = pos;
+                last_row[seq_id] = i;
+            }
+        }
+
+        for (int i = 0; i < n_tokens; ++i) {
+            LLAMA_LOG_INFO("last_row[%d] = %d\n", i, last_row[i]);
+            if (last_row[i] >= 0) {
+                data[i] = last_row[i];
+            }
+        }
+    }
+
     if (kv_self.recurrent) {
         const int64_t n_kv = kv_self.n;
 
@@ -11333,7 +11374,7 @@ static int llama_decode_internal(
             // no output
             res  = nullptr;
             embd = nullptr;
-        } else if (!hparams.causal_attn) {
+        } else if (!cparams.causal_attn) {
             res = nullptr; // do not extract logits for embedding models such as BERT
 
             // token or sequence embeddings
@@ -11436,8 +11477,9 @@ static int llama_decode_internal(
                             ggml_backend_tensor_get_async(backend_embd, embd, embd_out, 0, n_outputs_new*n_embd*sizeof(float));
                         }
                     } break;
-                case LLAMA_POOLING_TYPE_CLS:
                 case LLAMA_POOLING_TYPE_MEAN:
+                case LLAMA_POOLING_TYPE_CLS:
+                case LLAMA_POOLING_TYPE_LAST:
                     {
                         GGML_ASSERT(strcmp(embd->name, "result_embd_pooled") == 0);
 
@@ -15486,7 +15528,7 @@ struct llama_context * llama_new_context_with_model(
     }
 
     cparams.yarn_attn_factor *= hparams.rope_attn_factor;
-    cparams.causal_attn = hparams.causal_attn;
+    cparams.causal_attn = cparams.embeddings ? false : hparams.causal_attn;
 
     if (cparams.pooling_type == LLAMA_POOLING_TYPE_UNSPECIFIED) {
         if (hparams.pooling_type == LLAMA_POOLING_TYPE_UNSPECIFIED) {
