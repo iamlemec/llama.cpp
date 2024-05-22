@@ -8212,6 +8212,7 @@ struct llm_build_context {
                     cb(cur, "result_embd_pooled", -1);
                 } break;
             case LLAMA_POOLING_TYPE_CLS:
+            case LLAMA_POOLING_TYPE_LAST:
                 {
                     cur = ggml_get_rows(ctx0, cur, inp_cls);
                     cb(cur, "result_embd_pooled", -1);
@@ -8738,8 +8739,11 @@ struct llm_build_context {
         // inp_pos - contains the positions
         struct ggml_tensor * inp_pos = build_inp_pos();
 
-        // inp_cls - contains the CLS/SEP token
-        struct ggml_tensor * inp_cls  = build_inp_cls();
+        struct ggml_tensor * inp_cls = nullptr;
+        if (cparams.embeddings) {
+            // inp_cls - contains the CLS/SEP token
+            inp_cls  = build_inp_cls();
+        }
 
         // KQ_mask (mask for 1 head, it will be broadcasted to all heads)
         struct ggml_tensor * KQ_mask = build_inp_KQ_mask();
