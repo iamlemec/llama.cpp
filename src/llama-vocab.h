@@ -7,6 +7,58 @@
 #include <unordered_map>
 #include <map>
 
+
+//
+// naive_trie
+//
+
+struct naive_trie {
+    naive_trie() : has_value(false), value(0) {
+    }
+    void insert(const char * key, size_t len, int32_t value = 0) {
+        if (len == 0) {
+            this->has_value = true;
+            this->value = value;
+            return;
+        }
+        char c = key[0];
+        auto res = children.find(c);
+        if (res != children.end()) {
+            res->second.insert(key + 1, len - 1, value);
+        } else {
+            auto res = children.insert(std::make_pair(c, naive_trie()));
+            res.first->second.insert(key + 1, len - 1, value);
+        }
+    }
+    std::pair<const char *, size_t> get_longest_prefix(const char * key, size_t len, size_t offset = 0) const {
+        if (len == 0 || offset == len) {
+            return std::make_pair(key, offset);
+        }
+        char c = key[offset];
+        auto res = children.find(c);
+        if (res != children.end()) {
+            return res->second.get_longest_prefix(key, len, offset + 1);
+        } else {
+            return std::make_pair(key, offset);
+        }
+    }
+    const struct naive_trie * traverse(const char c) const {
+        auto res = children.find(c);
+        if (res != children.end()) {
+            return &res->second;
+        } else {
+            return NULL;
+        }
+    }
+    std::map<char, struct naive_trie> children;
+    bool has_value;
+    llama_token value;
+};
+
+//
+// llama_vocab
+//
+
 struct llama_vocab {
     using id    = llama_token;
     using token = std::string;
@@ -57,6 +109,9 @@ struct llama_vocab {
     bool tokenizer_treat_whitespace_as_suffix = false;
 
     std::vector<char> precompiled_charsmap;
+    struct naive_trie user_defined_token_matcher;
+    struct naive_trie token_matcher;
+    float unknown_token_score = 0.0f;
 
     int find_bpe_rank(const std::string & token_left, const std::string & token_right) const;
 };

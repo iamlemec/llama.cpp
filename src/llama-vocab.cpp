@@ -46,49 +46,6 @@ static std::string format(const char * fmt, ...) {
     return std::string(buf.data(), size);
 }
 
-struct naive_trie {
-    naive_trie() : has_value(false), value(0) {
-    }
-    void insert(const char * key, size_t len, int32_t value = 0) {
-        if (len == 0) {
-            this->has_value = true;
-            this->value = value;
-            return;
-        }
-        char c = key[0];
-        auto res = children.find(c);
-        if (res != children.end()) {
-            res->second.insert(key + 1, len - 1, value);
-        } else {
-            auto res = children.insert(std::make_pair(c, naive_trie()));
-            res.first->second.insert(key + 1, len - 1, value);
-        }
-    }
-    std::pair<const char *, size_t> get_longest_prefix(const char * key, size_t len, size_t offset = 0) {
-        if (len == 0 || offset == len) {
-            return std::make_pair(key, offset);
-        }
-        char c = key[offset];
-        auto res = children.find(c);
-        if (res != children.end()) {
-            return res->second.get_longest_prefix(key, len, offset + 1);
-        } else {
-            return std::make_pair(key, offset);
-        }
-    }
-    struct naive_trie * traverse(const char c) {
-        auto res = children.find(c);
-        if (res != children.end()) {
-            return &res->second;
-        } else {
-            return NULL;
-        }
-    }
-    std::map<char, struct naive_trie> children;
-    bool has_value;
-    llama_token value;
-};
-
 //
 // impl
 //
@@ -779,27 +736,6 @@ struct llm_tokenizer_ugm {
             prefix_replacements = &vocab.precompiled_charsmap[charsmap_offset];
             prefix_replacements_size = vocab.precompiled_charsmap.size() - charsmap_offset;
         }
-
-        for (unsigned int id = 0; id < vocab.id_to_token.size(); ++id) {
-            const auto &token_data = vocab.id_to_token[id];
-
-            if (llama_is_normal_token(vocab, id)) {
-                min_score = std::min<float>(min_score, token_data.score);
-                max_score = std::max<float>(max_score, token_data.score);
-            }
-
-            if (llama_is_normal_token(vocab, id) ||
-                llama_is_user_defined_token(vocab, id) ||
-                llama_is_unused_token(vocab, id)) {
-                token_matcher.insert(token_data.text.data(), token_data.text.size(), id);
-            }
-
-            if (llama_is_user_defined_token(vocab, id)) {
-                user_defined_token_matcher.insert(token_data.text.data(), token_data.text.size());
-            }
-        }
-
-        unknown_token_score = min_score - unknown_token_score_penalty;
     }
 
     /* This implementation is based on SentencePiece optimized Viterbi algorithm for
@@ -840,7 +776,7 @@ struct llm_tokenizer_ugm {
             // traverse the token matcher trie to find a matching token
             bool single_codepoint_token_found = false;
             const struct best_tokenization & current_best = tokenization_results[input_offset];
-            struct naive_trie * node  = token_matcher.traverse(normalized[prefix_offset++]);
+            const struct naive_trie * node  = vocab.token_matcher.traverse(normalized[prefix_offset++]);
 
             while (prefix_offset <= input_len && node != NULL) {
                 // check if we found valid token in prefix
@@ -1003,7 +939,7 @@ private:
         }
 
         // if input prefix matches some user-defined token return this token as normalization result
-        auto user_defined_token_match = user_defined_token_matcher.get_longest_prefix(&input[input_offset], input.size() - input_offset);
+        auto user_defined_token_match = vocab.user_defined_token_matcher.get_longest_prefix(&input[input_offset], input.size() - input_offset);
         if (user_defined_token_match.second > 0) {
             return { &input[input_offset], user_defined_token_match.second, user_defined_token_match.second };
         }
@@ -1076,8 +1012,6 @@ private:
     const uint32_t * xcda_array = NULL;
     size_t xcda_array_size = 0;
 
-    struct naive_trie user_defined_token_matcher;
-
     // this structure stores the best tokenization so far at input_offset
     struct best_tokenization {
         llama_token token_id;
@@ -1085,13 +1019,7 @@ private:
         float score_sum;
     };
 
-    float min_score = FLT_MAX;
-    float max_score = -FLT_MAX;
-
-    float unknown_token_score_penalty = 10.0;
     float unknown_token_score;
-
-    struct naive_trie token_matcher;
 };
 
 //

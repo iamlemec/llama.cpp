@@ -5217,6 +5217,36 @@ static void llm_load_hparams(
     hparams.rope_type = llama_rope_type(&model);
 }
 
+static bool llama_is_normal_token(const llama_vocab & vocab, llama_token id) {
+    GGML_ASSERT(vocab.type != LLAMA_VOCAB_TYPE_NONE);
+    return vocab.id_to_token[id].attr & LLAMA_TOKEN_ATTR_NORMAL;
+}
+
+static bool llama_is_unknown_token(const llama_vocab & vocab, llama_token id) {
+    GGML_ASSERT(vocab.type != LLAMA_VOCAB_TYPE_NONE);
+    return vocab.id_to_token[id].attr & LLAMA_TOKEN_ATTR_UNKNOWN;
+}
+
+static bool llama_is_control_token(const llama_vocab & vocab, llama_token id) {
+    GGML_ASSERT(vocab.type != LLAMA_VOCAB_TYPE_NONE);
+    return vocab.id_to_token[id].attr & LLAMA_TOKEN_ATTR_CONTROL;
+}
+
+static bool llama_is_byte_token(const llama_vocab & vocab, llama_token id) {
+    GGML_ASSERT(vocab.type != LLAMA_VOCAB_TYPE_NONE);
+    return vocab.id_to_token[id].attr & LLAMA_TOKEN_ATTR_BYTE;
+}
+
+static bool llama_is_user_defined_token(const llama_vocab & vocab, llama_token id) {
+    GGML_ASSERT(vocab.type != LLAMA_VOCAB_TYPE_NONE);
+    return vocab.id_to_token[id].attr & LLAMA_TOKEN_ATTR_USER_DEFINED;
+}
+
+static bool llama_is_unused_token(const llama_vocab & vocab, llama_token id) {
+    GGML_ASSERT(vocab.type != LLAMA_VOCAB_TYPE_NONE);
+    return vocab.id_to_token[id].attr & LLAMA_TOKEN_ATTR_UNUSED;
+}
+
 static void llm_load_vocab(
         llama_model_loader & ml,
         llama_model & model) {
@@ -5596,6 +5626,34 @@ static void llm_load_vocab(
             } else {
                 id = new_id;
             }
+        }
+
+        // parse precompiled charsmap
+        if (vocab.type == LLAMA_VOCAB_TYPE_UGM) {
+            float min_score = -FLT_MIN;
+            float max_score = FLT_MAX;
+
+            for (unsigned int id = 0; id < vocab.id_to_token.size(); ++id) {
+                const auto &token_data = vocab.id_to_token[id];
+
+                if (llama_is_normal_token(vocab, id)) {
+                    min_score = std::min<float>(min_score, token_data.score);
+                    max_score = std::max<float>(max_score, token_data.score);
+                }
+
+                if (llama_is_normal_token(vocab, id) ||
+                    llama_is_user_defined_token(vocab, id) ||
+                    llama_is_unused_token(vocab, id)) {
+                    vocab.token_matcher.insert(token_data.text.data(), token_data.text.size(), id);
+                }
+
+                if (llama_is_user_defined_token(vocab, id)) {
+                    vocab.user_defined_token_matcher.insert(token_data.text.data(), token_data.text.size());
+                }
+            }
+
+            float unknown_token_score_penalty = 10.0;
+            vocab.unknown_token_score = min_score - unknown_token_score_penalty;
         }
 
         // Handle add_bos_token and add_eos_token
