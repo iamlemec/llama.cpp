@@ -31,28 +31,6 @@ int64_t draft_delete_match(
 
 // TODO: combine these using templates with bool parameter for direction
 
-// this just looks for prefixes starting at the common beginning
-int64_t draft_prefix_match(
-    const llama_tokens & draft_tokens,
-    const llama_tokens & diffs_tokens
-) {
-    // get array sizes
-    int64_t draft_size = (int64_t) draft_tokens.size();
-    int64_t diffs_size = (int64_t) diffs_tokens.size();
-    int64_t common_size = std::min(draft_size, diffs_size);
-
-    // check for matches starting from beginning
-    int64_t i = 0;
-    for (; i < common_size; ++i) {
-        if (diffs_tokens[i] != draft_tokens[i]) {
-            break;
-        }
-    }
-
-    // return the number of matching tokens
-    return i;
-}
-
 // this looks for prefixes of draft that can start anywhere in diffs
 int64_t draft_insert_match(
     const llama_tokens & draft_tokens,
@@ -211,6 +189,7 @@ int main(int argc, char ** argv) {
     const auto t_dec_start = ggml_time_us();
 
     while (true) {
+        LOG_DBG("Current draft size: %d\n", (int) draft.size());
         LOG_DBG("Current draft: %s\n", string_from(ctx, draft).c_str());
         LOG_DBG("Current diffs: %s\n", string_from(ctx, diffs).c_str());
 
@@ -234,7 +213,11 @@ int main(int argc, char ** argv) {
 
         LOG_DBG("match_del: %d, match_ins: %d\n", (int) match_del, (int) match_ins);
 
-        //LOG_DBG("draft: %s\n", string_from(ctx_dft, draft).c_str());
+        if (use_draft) {
+            LOG_DBG("Using draft: %s\n", string_from(ctx, draft).c_str());
+        } else {
+            LOG_DBG("Not using draft\n");
+        }
 
         // always have a token to evaluate from before - id_last
         common_batch_clear(batch);
@@ -247,17 +230,14 @@ int main(int argc, char ** argv) {
                 for (int i = 0; i < n_batch1; ++i) {
                     common_batch_add(batch, draft[i], n_past + i, { 0 }, true);
                 }
+            } else {
+                // add eot token to the batch
+                common_batch_add(batch, llama_vocab_eot(vocab), n_past, { 0 }, true);
             }
 
-            //LOG_DBG("target batch: %s\n", string_from(ctx, batch).c_str());
+            LOG_DBG("target batch: %s\n", string_from(ctx, batch).c_str());
 
             llama_decode(ctx, batch);
-        }
-
-        if (use_draft) {
-            LOG_DBG("Using draft: %s\n", string_from(ctx, draft).c_str());
-        } else {
-            LOG_DBG("Not using draft\n");
         }
 
         // sample from the full target batch and return the accepted tokens based on the target sampler
@@ -273,9 +253,9 @@ int main(int argc, char ** argv) {
 
         GGML_ASSERT(ids.size() > 0); // there will always be at least one accepted token
 
-        // if its not a total match, go to manual mode
-        if (ids.size() < (size_t) batch.n_tokens) {
-            use_draft = false;
+        // chop of draft tokens used
+        if (use_draft) {
+            draft.erase(draft.begin(), draft.begin() + ids.size() - 1);
         }
 
         // update generation state
@@ -290,11 +270,6 @@ int main(int argc, char ** argv) {
         for (size_t i = 0; i < ids.size(); ++i) {
             tokens.push_back(id_last);
 
-            // if we're not in draft mode, update diffs tokens
-            if (!use_draft) {
-                diffs.push_back(id_last);
-            }
-
             id_last = ids[i];
 
             if (llama_vocab_is_eog(vocab, id_last)) {
@@ -302,17 +277,26 @@ int main(int argc, char ** argv) {
                 break;
             }
 
-            /*
             const std::string token_str = common_token_to_piece(ctx, id_last);
+
             if (params.use_color && i + 1 < ids.size()) {
                 LOG("\u001b[%dm%s\u001b[37m", (36 - 0 % 6), token_str.c_str());
             } else {
                 LOG("%s", token_str.c_str());
             }
-            */
         }
 
         LOG_DBG("accepted %d/%d draft tokens, the last target token is: (%d)\n", (int) ids.size() - 1, (int) batch.n_tokens, id_last);
+
+        // if its not a total match, go to manual mode
+        if (ids.size() - 1 < (size_t) batch.n_tokens) {
+            use_draft = false;
+        }
+
+        // if we're not in draft mode, update diffs tokens
+        if (!use_draft) {
+            diffs.push_back(id_last);
+        }
 
         {
             // LOG_DBG("clear kv cache from any extra tokens, n_past = %d\n", n_past);
