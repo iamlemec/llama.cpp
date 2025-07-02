@@ -159,6 +159,7 @@ int main(int argc, char ** argv) {
     // draft text to use for prediction
     std::string draft_text = params.speculative.text;
     std::vector<llama_token> draft = common_tokenize(ctx, " " + draft_text, true, true);
+    std::vector<llama_token> draft_null;
     const int n_draft = draft.size();
 
     const auto t_enc_start = ggml_time_us();
@@ -230,9 +231,6 @@ int main(int argc, char ** argv) {
                 for (int i = 0; i < n_batch1; ++i) {
                     common_batch_add(batch, draft[i], n_past + i, { 0 }, true);
                 }
-            } else {
-                // add eot token to the batch
-                common_batch_add(batch, llama_vocab_eot(vocab), n_past, { 0 }, true);
             }
 
             LOG_DBG("target batch: %s\n", string_from(ctx, batch).c_str());
@@ -247,7 +245,8 @@ int main(int argc, char ** argv) {
         // available logits from the batch and sample the next token until we run out of logits or the sampler
         // disagrees with the draft
         //
-        const auto ids = common_sampler_sample_and_accept_n(smpl, ctx, draft);
+        const std::vector<llama_token> draft_use = use_draft ? draft : draft_null;
+        const auto ids = common_sampler_sample_and_accept_n(smpl, ctx, draft_use);
 
         LOG_DBG("ids: %s\n", string_from(ctx, ids).c_str());
 
