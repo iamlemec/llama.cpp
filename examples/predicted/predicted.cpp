@@ -12,40 +12,113 @@
 
 const int min_match_length = 3; // minimum number of tokens to match
 
-std::pair<int64_t, int64_t> common_substring_match(
+int64_t draft_prefix_match(
+    const llama_tokens & draft_tokens,
+    const llama_tokens & prefix_tokens
+);
+
+int64_t draft_insert_match(
     const llama_tokens & draft_tokens,
     const llama_tokens & prefix_tokens,
     int64_t min_match_length
 );
 
-// TODO: this only accounts for insertions, but doesn't look for deletions yet
-std::pair<int64_t, int64_t> common_substring_match(
+int64_t draft_delete_match(
     const llama_tokens & draft_tokens,
     const llama_tokens & prefix_tokens,
     int64_t min_match_length
+);
+
+// TODO: combine these using templates with bool parameter for direction
+
+// this just looks for prefixes starting at the common beginning
+int64_t draft_prefix_match(
+    const llama_tokens & draft_tokens,
+    const llama_tokens & diffs_tokens
 ) {
     // get array sizes
     int64_t draft_size = (int64_t) draft_tokens.size();
-    int64_t prefix_size = (int64_t) prefix_tokens.size();
+    int64_t diffs_size = (int64_t) diffs_tokens.size();
+    int64_t common_size = std::min(draft_size, diffs_size);
 
-    // check for matches starting from beginning of draft
-    for (int64_t i = 0; i < prefix_size - min_match_length + 1; ++i) {
-        int64_t j = 0;
-        for (; j < draft_size; ++j) {
-            if (
-                (i + j >= prefix_size) ||
-                (prefix_tokens[i + j] != draft_tokens[j])
-            ) {
-                break;
-            }
-        }
-        if (j >= min_match_length) {
-            return std::pair<int64_t, int64_t>(j, i + j);
+    // check for matches starting from beginning
+    int64_t i = 0;
+    for (; i < common_size; ++i) {
+        if (diffs_tokens[i] != draft_tokens[i]) {
+            break;
         }
     }
 
-    return std::pair<int64_t, int64_t>(0, 0);
+    // return the number of matching tokens
+    return i;
 }
+
+// this looks for prefixes of draft that can start anywhere in diffs
+int64_t draft_insert_match(
+    const llama_tokens & draft_tokens,
+    const llama_tokens & diffs_tokens,
+    int64_t min_match
+) {
+    // get array sizes
+    int64_t draft_size = (int64_t) draft_tokens.size();
+    int64_t diffs_size = (int64_t) diffs_tokens.size();
+    int64_t common_size = std::min(draft_size, diffs_size);
+
+    // if the arrays are too short, return -1
+    if (common_size < min_match) {
+        return -1;
+    }
+
+    // check for matches starting from end
+    for (int64_t i = 0; i < diffs_size - min_match + 1; ++i) {
+        int64_t j = 0;
+        for (; j < min_match; ++j) {
+            if (draft_tokens[j] != diffs_tokens[i + j]) {
+                break;
+            }
+        }
+        if (j == min_match) {
+            return min_match;
+        }
+    }
+
+    // no match found
+    return -1;
+}
+
+// this looks for suffixes of prefix that can start anywhere in draft
+int64_t draft_delete_match(
+    const llama_tokens & draft_tokens,
+    const llama_tokens & diffs_tokens,
+    int64_t min_match
+) {
+    // get array sizes
+    int64_t draft_size = (int64_t) draft_tokens.size();
+    int64_t diffs_size = (int64_t) diffs_tokens.size();
+    int64_t common_size = std::min(draft_size, diffs_size);
+
+    // if the arrays are too short, return -1
+    if (common_size < min_match) {
+        return -1;
+    }
+
+    // check for matches starting from end
+    for (int64_t i = 0; i < draft_size - min_match + 1; ++i) {
+        int64_t j = 0;
+        for (; j < min_match; ++j) {
+            if (diffs_tokens[j] != draft_tokens[i + j]) {
+                break;
+            }
+        }
+        if (j == min_match) {
+            return i + min_match;
+        }
+    }
+
+    // no match found
+    return -1;
+}
+
 
 int main(int argc, char ** argv) {
     common_params params;
@@ -107,7 +180,7 @@ int main(int argc, char ** argv) {
 
     // draft text to use for prediction
     std::string draft_text = params.speculative.text;
-    std::vector<llama_token> draft = common_tokenize(ctx, draft_text, true, true);
+    std::vector<llama_token> draft = common_tokenize(ctx, " " + draft_text, true, true);
     const int n_draft = draft.size();
 
     const auto t_enc_start = ggml_time_us();
@@ -123,8 +196,8 @@ int main(int argc, char ** argv) {
     tokens.reserve(llama_n_ctx(ctx));
 
     // prefix: tokens since last match
-    llama_tokens prefix;
-    prefix.reserve(llama_n_ctx(ctx));
+    llama_tokens diffs;
+    diffs.reserve(llama_n_ctx(ctx));
 
     // n_past is the number of tokens in the target context
     // note: we always need at least one token to evaluate from before
@@ -138,16 +211,28 @@ int main(int argc, char ** argv) {
     const auto t_dec_start = ggml_time_us();
 
     while (true) {
-        // check if the draft matches the prefix and chop if needed
-        std::pair<int64_t, int64_t> match = common_substring_match(draft, prefix, min_match_length);
-        if (match.first >= 0) {
-            draft.erase(draft.begin(), draft.begin() + match.first);
-            prefix.erase(prefix.begin(), prefix.begin() + match.second);
-            n_accept += match.first;
+        LOG_DBG("Current draft: %s\n", string_from(ctx, draft).c_str());
+        LOG_DBG("Current diffs: %s\n", string_from(ctx, diffs).c_str());
+
+        // look for deletions in draft
+        const int64_t match_del = draft_delete_match(draft, diffs, min_match_length);
+        if (match_del >= 0) {
+            draft.erase(draft.begin(), draft.begin() + match_del);
+            diffs.clear();
             use_draft = true;
-        } else {
-            use_draft = false;
+            n_accept += min_match_length;
         }
+
+        // look for insertions in draft
+        const int64_t match_ins = draft_insert_match(draft, diffs, min_match_length);
+        if (match_ins >= 0) {
+            draft.erase(draft.begin(), draft.begin() + match_ins);
+            diffs.clear();
+            use_draft = true;
+            n_accept += min_match_length;
+        }
+
+        LOG_DBG("match_del: %d, match_ins: %d\n", (int) match_del, (int) match_ins);
 
         //LOG_DBG("draft: %s\n", string_from(ctx_dft, draft).c_str());
 
@@ -169,6 +254,12 @@ int main(int argc, char ** argv) {
             llama_decode(ctx, batch);
         }
 
+        if (use_draft) {
+            LOG_DBG("Using draft: %s\n", string_from(ctx, draft).c_str());
+        } else {
+            LOG_DBG("Not using draft\n");
+        }
+
         // sample from the full target batch and return the accepted tokens based on the target sampler
         //
         // for each token to be accepted, the sampler would have to sample that same token
@@ -178,10 +269,16 @@ int main(int argc, char ** argv) {
         //
         const auto ids = common_sampler_sample_and_accept_n(smpl, ctx, draft);
 
-        //LOG_DBG("ids: %s\n", string_from(ctx, ids).c_str());
+        LOG_DBG("ids: %s\n", string_from(ctx, ids).c_str());
 
         GGML_ASSERT(ids.size() > 0); // there will always be at least one accepted token
 
+        // if its not a total match, go to manual mode
+        if (ids.size() < (size_t) batch.n_tokens) {
+            use_draft = false;
+        }
+
+        // update generation state
         n_past    += ids.size() - 1;
         n_predict += ids.size();
 
@@ -192,7 +289,11 @@ int main(int argc, char ** argv) {
         //
         for (size_t i = 0; i < ids.size(); ++i) {
             tokens.push_back(id_last);
-            prefix.push_back(id_last);
+
+            // if we're not in draft mode, update diffs tokens
+            if (!use_draft) {
+                diffs.push_back(id_last);
+            }
 
             id_last = ids[i];
 
@@ -201,19 +302,20 @@ int main(int argc, char ** argv) {
                 break;
             }
 
+            /*
             const std::string token_str = common_token_to_piece(ctx, id_last);
-
             if (params.use_color && i + 1 < ids.size()) {
                 LOG("\u001b[%dm%s\u001b[37m", (36 - 0 % 6), token_str.c_str());
             } else {
                 LOG("%s", token_str.c_str());
             }
+            */
         }
 
-        LOG_DBG("accepted %d/%d draft tokens, the last target token is: (%d)\n", (int) ids.size() - 1, (int) draft.size(), id_last);
+        LOG_DBG("accepted %d/%d draft tokens, the last target token is: (%d)\n", (int) ids.size() - 1, (int) batch.n_tokens, id_last);
 
         {
-            LOG_DBG("clear kv cache from any extra tokens, n_past = %d\n", n_past);
+            // LOG_DBG("clear kv cache from any extra tokens, n_past = %d\n", n_past);
 
             llama_memory_seq_rm(llama_get_memory(ctx), 0, n_past, -1);
         }
@@ -221,6 +323,8 @@ int main(int argc, char ** argv) {
         if ((params.n_predict >= 0 && n_predict > params.n_predict) || has_eos) {
             break;
         }
+
+        LOG_DBG("\n");
     }
 
     auto t_dec_end = ggml_time_us();

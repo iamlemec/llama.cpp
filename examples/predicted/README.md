@@ -9,6 +9,7 @@ build/bin/llama-predicted \
     -c 0 -ngl 99 --color \
     --sampling-seq k --top-k 1 -fa --temp 0.0 \
     -ngld 99 --draft-max 16 --draft-min 5 \
-    -p "What is the capital of France?"
-    --text "The capital of France is Paris."
+    -p "What is the capital of France?" \
+    --draft-text "The capital of France is Paris." \
+    --log-verbose
 ```
