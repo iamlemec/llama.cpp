@@ -142,7 +142,7 @@ int main(int argc, char ** argv) {
         LOG("%s", common_token_to_piece(ctx, id).c_str());
     }
 
-    const int match_length = params.speculative.n_min;
+    const int draft_min = params.speculative.n_min;
     const int draft_max = params.speculative.n_max;
 
     int n_predict = 0;
@@ -192,21 +192,21 @@ int main(int argc, char ** argv) {
         LOG_DBG("Current diffs: %s\n", string_from(ctx, diffs).c_str());
 
         // look for deletions in draft
-        const int64_t match_del = draft_delete_match(draft, diffs, match_length);
+        const int64_t match_del = draft_delete_match(draft, diffs, draft_min);
         if (match_del >= 0) {
             draft.erase(draft.begin(), draft.begin() + match_del);
             diffs.clear();
             use_draft = true;
-            n_accept += match_length;
+            n_accept += draft_min;
         }
 
         // look for insertions in draft
-        const int64_t match_ins = draft_insert_match(draft, diffs, match_length);
+        const int64_t match_ins = draft_insert_match(draft, diffs, draft_min);
         if (match_ins >= 0) {
             draft.erase(draft.begin(), draft.begin() + match_ins);
             diffs.clear();
             use_draft = true;
-            n_accept += match_length;
+            n_accept += draft_min;
         }
 
         LOG_DBG("match_del: %d, match_ins: %d\n", (int) match_del, (int) match_ins);
