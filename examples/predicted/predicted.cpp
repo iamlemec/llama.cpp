@@ -64,7 +64,7 @@ int64_t draft_insert_match(
     return -1;
 }
 
-// this looks for suffixes of prefix that can start anywhere in draft
+// this looks for suffixes of diffs that can start anywhere in draft
 int64_t draft_delete_match(
     const llama_tokens & draft_tokens,
     const llama_tokens & diffs_tokens,
@@ -84,7 +84,7 @@ int64_t draft_delete_match(
     for (int64_t i = 0; i < draft_size - min_match + 1; ++i) {
         int64_t j = 0;
         for (; j < min_match; ++j) {
-            if (diffs_tokens[j] != draft_tokens[i + j]) {
+            if (diffs_tokens[diffs_size - min_match + j] != draft_tokens[i + j]) {
                 break;
             }
         }
