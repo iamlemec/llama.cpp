@@ -10,23 +10,16 @@
 #include <string>
 #include <vector>
 
-const int min_match_length = 3; // minimum number of tokens to match
-
-int64_t draft_prefix_match(
-    const llama_tokens & draft_tokens,
-    const llama_tokens & prefix_tokens
-);
-
 int64_t draft_insert_match(
     const llama_tokens & draft_tokens,
-    const llama_tokens & prefix_tokens,
-    int64_t min_match_length
+    const llama_tokens & diffs_tokens,
+    int64_t match_length
 );
 
 int64_t draft_delete_match(
     const llama_tokens & draft_tokens,
-    const llama_tokens & prefix_tokens,
-    int64_t min_match_length
+    const llama_tokens & diffs_tokens,
+    int64_t match_length
 );
 
 // TODO: combine these using templates with bool parameter for direction
@@ -35,7 +28,7 @@ int64_t draft_delete_match(
 int64_t draft_insert_match(
     const llama_tokens & draft_tokens,
     const llama_tokens & diffs_tokens,
-    int64_t min_match
+    int64_t match_length
 ) {
     // get array sizes
     int64_t draft_size = (int64_t) draft_tokens.size();
@@ -43,20 +36,20 @@ int64_t draft_insert_match(
     int64_t common_size = std::min(draft_size, diffs_size);
 
     // if the arrays are too short, return -1
-    if (common_size < min_match) {
+    if (common_size < match_length) {
         return -1;
     }
 
     // check for matches starting from end
-    for (int64_t i = 0; i < diffs_size - min_match + 1; ++i) {
+    for (int64_t i = 0; i < diffs_size - match_length + 1; ++i) {
         int64_t j = 0;
-        for (; j < min_match; ++j) {
+        for (; j < match_length; ++j) {
             if (draft_tokens[j] != diffs_tokens[i + j]) {
                 break;
             }
         }
-        if (j == min_match) {
-            return min_match;
+        if (j == match_length) {
+            return match_length;
         }
     }
 
@@ -68,7 +61,7 @@ int64_t draft_insert_match(
 int64_t draft_delete_match(
     const llama_tokens & draft_tokens,
     const llama_tokens & diffs_tokens,
-    int64_t min_match
+    int64_t match_length
 ) {
     // get array sizes
     int64_t draft_size = (int64_t) draft_tokens.size();
@@ -76,20 +69,20 @@ int64_t draft_delete_match(
     int64_t common_size = std::min(draft_size, diffs_size);
 
     // if the arrays are too short, return -1
-    if (common_size < min_match) {
+    if (common_size < match_length) {
         return -1;
     }
 
     // check for matches starting from end
-    for (int64_t i = 0; i < draft_size - min_match + 1; ++i) {
+    for (int64_t i = 0; i < draft_size - match_length + 1; ++i) {
         int64_t j = 0;
-        for (; j < min_match; ++j) {
-            if (diffs_tokens[diffs_size - min_match + j] != draft_tokens[i + j]) {
+        for (; j < match_length; ++j) {
+            if (diffs_tokens[diffs_size - match_length + j] != draft_tokens[i + j]) {
                 break;
             }
         }
-        if (j == min_match) {
-            return i + min_match;
+        if (j == match_length) {
+            return i + match_length;
         }
     }
 
@@ -149,6 +142,8 @@ int main(int argc, char ** argv) {
         LOG("%s", common_token_to_piece(ctx, id).c_str());
     }
 
+    const int match_length = params.speculative.n_min;
+
     int n_predict = 0;
     int n_accept  = 0;
 
@@ -195,21 +190,21 @@ int main(int argc, char ** argv) {
         LOG_DBG("Current diffs: %s\n", string_from(ctx, diffs).c_str());
 
         // look for deletions in draft
-        const int64_t match_del = draft_delete_match(draft, diffs, min_match_length);
+        const int64_t match_del = draft_delete_match(draft, diffs, match_length);
         if (match_del >= 0) {
             draft.erase(draft.begin(), draft.begin() + match_del);
             diffs.clear();
             use_draft = true;
-            n_accept += min_match_length;
+            n_accept += match_length;
         }
 
         // look for insertions in draft
-        const int64_t match_ins = draft_insert_match(draft, diffs, min_match_length);
+        const int64_t match_ins = draft_insert_match(draft, diffs, match_length);
         if (match_ins >= 0) {
             draft.erase(draft.begin(), draft.begin() + match_ins);
             diffs.clear();
             use_draft = true;
-            n_accept += min_match_length;
+            n_accept += match_length;
         }
 
         LOG_DBG("match_del: %d, match_ins: %d\n", (int) match_del, (int) match_ins);
