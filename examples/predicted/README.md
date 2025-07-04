@@ -2,10 +2,6 @@
 
 Demonstration of predicted output generation with recovery. See `patch.sh` for an example and `specul.sh` for comparison with draft models.
 
-# Todo
-
-- It seems like we only need to track the last `draft_min` elements of diffs, not the whole thing
-
 # Algorithm
 
 - `n_past`: cumulative number of tokens for which logits have been computed
