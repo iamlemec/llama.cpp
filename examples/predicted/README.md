@@ -1,11 +1,14 @@
 # llama.cpp/examples/predicted
 
-Demonstration of predicted output generation with recovery.
+Demonstration of predicted output generation with recovery. See `patch.sh` for an example and `specul.sh` for comparison with draft models.
+
+# Todo
+
+- It seems like we only need to track the last `draft_min` elements of diffs, not the whole thing
 
 # Algorithm
 
-`common_sampler_sample_and_accept_n`: Runs sampler on draft logits and accepts matches. If the full draft is accepted, it runs another sample to generate the last token. If the draft is empty, it simply runs the sampler once.
-
-`last_id`: This tracks the last token for which logits have been computed. This goes in as the first token for the next batch.
-
-`n_past`: This is the cumulative number of tokens for which logits have been computed.
+- `n_past`: cumulative number of tokens for which logits have been computed
+- `use_draft`: whether we're using the draft or not
+- `id_last`: the last token for which logits have been computed
+- `batch_idx`: current index in the current batch (-1 means we need to decode a new batch)

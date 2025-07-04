@@ -9,16 +9,17 @@
 #include <cstring>
 #include <string>
 #include <vector>
+#include <deque>
 
 int64_t draft_insert_match(
-    const llama_tokens & draft_tokens,
-    const llama_tokens & diffs_tokens,
+    const std::deque<llama_token> & draft_tokens,
+    const std::vector<llama_token> & diffs_tokens,
     int64_t match_length
 );
 
 int64_t draft_delete_match(
-    const llama_tokens & draft_tokens,
-    const llama_tokens & diffs_tokens,
+    const std::deque<llama_token> & draft_tokens,
+    const std::vector<llama_token> & diffs_tokens,
     int64_t match_length
 );
 
@@ -26,8 +27,8 @@ int64_t draft_delete_match(
 
 // this looks for prefixes of draft that can start anywhere in diffs
 int64_t draft_insert_match(
-    const llama_tokens & draft_tokens,
-    const llama_tokens & diffs_tokens,
+    const std::deque<llama_token> & draft_tokens,
+    const std::vector<llama_token> & diffs_tokens,
     int64_t match_length
 ) {
     // get array sizes
@@ -59,8 +60,8 @@ int64_t draft_insert_match(
 
 // this looks for suffixes of diffs that can start anywhere in draft
 int64_t draft_delete_match(
-    const llama_tokens & draft_tokens,
-    const llama_tokens & diffs_tokens,
+    const std::deque<llama_token> & draft_tokens,
+    const std::vector<llama_token> & diffs_tokens,
     int64_t match_length
 ) {
     // get array sizes
@@ -124,6 +125,11 @@ int main(int argc, char ** argv) {
     std::vector<llama_token> inp;
     inp = common_tokenize(ctx, params.prompt, true, true);
 
+    if (inp.empty()) {
+        LOG_ERR("%s: the prompt is empty\n", __func__);
+        return 1;
+    }
+
     if (llama_n_ctx(ctx) < (uint32_t) inp.size()) {
         LOG_ERR("%s: the prompt exceeds the context size (%d tokens, ctx %d)\n", __func__, (int) inp.size(), llama_n_ctx(ctx));
 
@@ -145,17 +151,12 @@ int main(int argc, char ** argv) {
     const int draft_min = params.speculative.n_min;
     const int draft_max = params.speculative.n_max;
 
-    int n_predict = 0;
-    int n_accept  = 0;
-
-    // used to determine end of generation
-    bool use_draft = true;
-    bool has_eos = false;
-
     // draft text to use for prediction
     std::string draft_text = params.speculative.text;
-    std::vector<llama_token> draft = common_tokenize(ctx, draft_text, true, true);
-    std::vector<llama_token> draft_null;
+    std::vector<llama_token> draft_tokens = common_tokenize(ctx, draft_text, false, true);
+
+    // use deque for front popping
+    std::deque<llama_token> draft(draft_tokens.begin(), draft_tokens.end());
     const int n_draft = draft.size();
 
     const auto t_enc_start = ggml_time_us();
@@ -163,8 +164,21 @@ int main(int argc, char ** argv) {
     // target model sampling context
     struct common_sampler * smpl = common_sampler_init(model, params.sampling);
 
-    // eval the prompt (without the last token)
-    llama_decode(ctx, llama_batch_get_one(inp.data(), inp.size() - 1));
+    // eval the prompt
+    const int n_prompt = inp.size();
+    llama_decode(ctx, llama_batch_get_one(inp.data(), n_prompt - 1));
+
+    const auto t_enc_end = ggml_time_us();
+    const auto t_dec_start = ggml_time_us();
+
+    // track stats
+    int n_accept = 0;
+
+    // generation state
+    int n_past = n_prompt - 1;
+    bool use_draft = !draft.empty();
+    llama_token id_last = inp.back();
+    int batch_idx = -1;
 
     // tokens: all prompt + generated tokens
     llama_tokens tokens(inp);
@@ -174,21 +188,21 @@ int main(int argc, char ** argv) {
     llama_tokens diffs;
     diffs.reserve(llama_n_ctx(ctx));
 
-    // n_past is the number of tokens in the target context
-    // note: we always need at least one token to evaluate from before
-    llama_token id_last = inp.back();
-    int n_past = inp.size() - 1;
-
     // batch for evaluating the model
-    llama_batch batch = llama_batch_init(llama_n_batch(ctx), 0, 1);
-    const int batch_max = std::min(draft_max, (int) llama_n_batch(ctx));
+    const int draft_size0 = std::min(draft_max, (int) llama_n_batch(ctx) - 1);
+    llama_batch batch = llama_batch_init(draft_size0 + 1, 0, 1);
 
-    const auto t_enc_end = ggml_time_us();
-    const auto t_dec_start = ggml_time_us();
+    // loop through (successfully) generated tokens
+    for (;; n_past++) {
+        // we've hit the generation limit
+        if (params.n_predict >= 0 && n_past >= params.n_predict) {
+            break;
+        }
 
-    while (true) {
-        LOG_DBG("Current draft size: %d\n", (int) draft.size());
-        LOG_DBG("Current draft: %s\n", string_from(ctx, draft).c_str());
+        std::vector<llama_token> draft_copy(draft.begin(), draft.end());
+        LOG_DBG("n_past: %d, use_draft: %d, batch_idx: %d\n", n_past, use_draft, batch_idx);
+        LOG_DBG("id_last: %s\n", common_token_to_piece(ctx, id_last).c_str());
+        LOG_DBG("Current draft: %s\n", string_from(ctx, draft_copy).c_str());
         LOG_DBG("Current diffs: %s\n", string_from(ctx, diffs).c_str());
 
         // look for deletions in draft
@@ -197,6 +211,7 @@ int main(int argc, char ** argv) {
             draft.erase(draft.begin(), draft.begin() + match_del);
             diffs.clear();
             use_draft = true;
+            batch_idx = -1;
             n_accept += draft_min;
         }
 
@@ -206,92 +221,72 @@ int main(int argc, char ** argv) {
             draft.erase(draft.begin(), draft.begin() + match_ins);
             diffs.clear();
             use_draft = true;
+            batch_idx = -1;
             n_accept += draft_min;
         }
 
         LOG_DBG("match_del: %d, match_ins: %d\n", (int) match_del, (int) match_ins);
 
-        // always have a token to evaluate from before - id_last
-        common_batch_clear(batch);
-        common_batch_add  (batch, id_last, n_past++, { 0 }, true);
+        // generate new logits if needed
+        if (use_draft) {
+            if (batch_idx == -1 || batch_idx >= batch.n_tokens - 1) {
+                const int draft_size = std::min(draft_size0, (int) draft.size());
 
-        // evaluate the target model on draft[0..n_batch-1]
-        {
-            if (use_draft) {
-                const int n_batch1 = std::min(batch_max, (int) draft.size());
-                for (int i = 0; i < n_batch1; ++i) {
-                    common_batch_add(batch, draft[i], n_past + i, { 0 }, true);
+                // decode from draft
+                common_batch_clear(batch);
+                common_batch_add(batch, id_last, n_past, { 0 }, true);
+                for (int i = 0; i < draft_size; ++i) {
+                    common_batch_add(batch, draft[i], n_past + 1 + i, { 0 }, true);
                 }
+                llama_decode(ctx, batch);
+
+                // update generation state
+                batch_idx = 0;
+
+                LOG_DBG("decoded batch [idx: %d]: %s\n", batch_idx, string_from(ctx, batch).c_str());
+            } else {
+                batch_idx++;
             }
-
-            LOG_DBG("target batch: %s\n", string_from(ctx, batch).c_str());
-
+        } else {
+            // decode from sampled token
+            common_batch_clear(batch);
+            common_batch_add(batch, id_last, n_past, { 0 }, true);
             llama_decode(ctx, batch);
+
+            // update generation state
+            batch_idx = 0;
         }
 
-        // sample from the full target batch and return the accepted tokens based on the target sampler
-        //
-        // for each token to be accepted, the sampler would have to sample that same token
-        // in such cases, instead of decoding the sampled token as we normally do, we simply continue with the
-        // available logits from the batch and sample the next token until we run out of logits or the sampler
-        // disagrees with the draft
-        //
-        const std::vector<llama_token> draft_cut(draft.begin(), draft.begin() + draft_max);
-        const std::vector<llama_token> draft_use = use_draft ? draft_cut : draft_null;
-        const auto ids = common_sampler_sample_and_accept_n(smpl, ctx, draft_use);
+        // sample from the target model
+        id_last = common_sampler_sample(smpl, ctx, batch_idx);
+        common_sampler_accept(smpl, id_last, true);
+        tokens.push_back(id_last);
 
-        LOG_DBG("ids: %s\n", string_from(ctx, ids).c_str());
+        LOG_DBG("sampled token: %s\n", common_token_to_piece(ctx, id_last).c_str());
 
-        GGML_ASSERT(ids.size() > 0); // there will always be at least one accepted token
+        // check for EOS
+        if (llama_vocab_is_eog(vocab, id_last)) {
+            LOG_DBG("EOS\n");
+            break;
+        }
 
-        // update generation state
-        n_past    += ids.size() - 1;
-        n_predict += ids.size();
+        // did the sampled token match the draft?
+        if (use_draft) {
+            if (id_last == draft.front()) {
+                draft.pop_front();
+                n_accept += 1;
+            } else {
+                use_draft = false;
+                llama_memory_seq_rm(llama_get_memory(ctx), 0, n_past + 1, -1);
+            }
+        }
 
         // process the accepted tokens and update contexts
-        //
-        // this is the standard token post-processing that we normally do
-        // in this case, we do it for a group of accepted tokens at once
-        //
-        for (size_t i = 0; i < ids.size(); ++i) {
-            tokens.push_back(id_last);
-
-            id_last = ids[i];
-
-            if (llama_vocab_is_eog(vocab, id_last)) {
-                has_eos = true;
-                break;
-            }
-
-            const std::string token_str = common_token_to_piece(ctx, id_last);
-
-            if (params.use_color && i < draft.size() && id_last == draft[i]) {
-                LOG("\u001b[%dm%s\u001b[37m", (36 - 0 % 6), token_str.c_str());
-            } else {
-                LOG("%s", token_str.c_str());
-            }
-        }
-
-        LOG_DBG("accepted %d/%d draft tokens, the last target token is: (%d)\n", (int) ids.size() - 1, (int) draft_use.size(), id_last);
-        LOG_DBG("ids.size() = %d, draft.size() = %d\n", (int) ids.size(), (int) draft_use.size());
-
-        //
-        // handle trimming the draft and accumulating diffs
-        //
-
-        // len(ids) < len(draft_use) => not a total match
-        // len(ids) > len(draft_use) => a total match and we generated one more
-        // len(ids) == len(draft_use) => should never happen!
-        const bool total_match = draft_use.size() > 0 && ids.size() > draft_use.size();
-        const bool last_matched = total_match && draft.size() >= ids.size() && draft[ids.size() - 1] == id_last;
-        const int64_t match_len = last_matched ? ids.size() : ids.size() - 1;
-        if (match_len > 0) {
-            draft.erase(draft.begin(), draft.begin() + match_len);
-        }
-
-        // if its not a total match, go to manual mode
-        if (!total_match || !last_matched) {
-            use_draft = false;
+        const std::string token_str = common_token_to_piece(ctx, id_last);
+        if (params.use_color && use_draft) {
+            LOG("\u001b[%dm%s\u001b[37m", (36 - 0 % 6), token_str.c_str());
+        } else {
+            LOG("%s", token_str.c_str());
         }
 
         // if we're not in draft mode, update diffs tokens
@@ -299,18 +294,10 @@ int main(int argc, char ** argv) {
             diffs.push_back(id_last);
         }
 
-        //
-        // original cleanup code for the target model
-        //
-
-        {
-            // LOG_DBG("clear kv cache from any extra tokens, n_past = %d\n", n_past);
-
-            llama_memory_seq_rm(llama_get_memory(ctx), 0, n_past, -1);
-        }
-
-        if ((params.n_predict >= 0 && n_predict > params.n_predict) || has_eos) {
-            break;
+        // are we out of draft tokens?
+        if (draft.empty()) {
+            use_draft = false;
+            llama_memory_seq_rm(llama_get_memory(ctx), 0, n_past + 1, -1);
         }
 
         LOG_DBG("\n\n");
@@ -318,16 +305,13 @@ int main(int argc, char ** argv) {
 
     auto t_dec_end = ggml_time_us();
 
-    const int n_input = inp.size();
-
     LOG("\n\n");
 
-    LOG_INF("encoded %4d tokens in %8.3f seconds, speed: %8.3f t/s\n", n_input,   (t_enc_end - t_enc_start) / 1e6f, inp.size() / ((t_enc_end - t_enc_start) / 1e6f));
-    LOG_INF("decoded %4d tokens in %8.3f seconds, speed: %8.3f t/s\n", n_predict, (t_dec_end - t_dec_start) / 1e6f, n_predict  / ((t_dec_end - t_dec_start) / 1e6f));
+    LOG_INF("encoded %4d tokens in %8.3f seconds, speed: %8.3f t/s\n", n_prompt,   (t_enc_end - t_enc_start) / 1e6f, n_prompt / ((t_enc_end - t_enc_start) / 1e6f));
+    LOG_INF("decoded %4d tokens in %8.3f seconds, speed: %8.3f t/s\n", n_past, (t_dec_end - t_dec_start) / 1e6f, n_past  / ((t_dec_end - t_dec_start) / 1e6f));
 
     LOG_INF("\n");
     LOG_INF("n_draft   = %d\n", n_draft);
-    LOG_INF("n_predict = %d\n", n_predict);
     LOG_INF("n_accept  = %d\n", n_accept);
 
     LOG_INF("\n");
