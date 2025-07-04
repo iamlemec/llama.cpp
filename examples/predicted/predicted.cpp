@@ -11,55 +11,14 @@
 #include <vector>
 #include <deque>
 
-int64_t draft_insert_match(
+int64_t draft_match_index(
     const std::deque<llama_token> & draft_tokens,
     const std::vector<llama_token> & diffs_tokens,
     int64_t match_length
 );
-
-int64_t draft_delete_match(
-    const std::deque<llama_token> & draft_tokens,
-    const std::vector<llama_token> & diffs_tokens,
-    int64_t match_length
-);
-
-// TODO: combine these using templates with bool parameter for direction
-
-// this looks for prefixes of draft that can start anywhere in diffs
-int64_t draft_insert_match(
-    const std::deque<llama_token> & draft_tokens,
-    const std::vector<llama_token> & diffs_tokens,
-    int64_t match_length
-) {
-    // get array sizes
-    int64_t draft_size = (int64_t) draft_tokens.size();
-    int64_t diffs_size = (int64_t) diffs_tokens.size();
-    int64_t common_size = std::min(draft_size, diffs_size);
-
-    // if the arrays are too short, return -1
-    if (common_size < match_length) {
-        return -1;
-    }
-
-    // check for matches starting from end
-    for (int64_t i = 0; i < diffs_size - match_length + 1; ++i) {
-        int64_t j = 0;
-        for (; j < match_length; ++j) {
-            if (draft_tokens[j] != diffs_tokens[i + j]) {
-                break;
-            }
-        }
-        if (j == match_length) {
-            return match_length;
-        }
-    }
-
-    // no match found
-    return -1;
-}
 
 // this looks for suffixes of diffs that can start anywhere in draft
-int64_t draft_delete_match(
+int64_t draft_match_index(
     const std::deque<llama_token> & draft_tokens,
     const std::vector<llama_token> & diffs_tokens,
     int64_t match_length
@@ -90,7 +49,6 @@ int64_t draft_delete_match(
     // no match found
     return -1;
 }
-
 
 int main(int argc, char ** argv) {
     common_params params;
@@ -206,26 +164,16 @@ int main(int argc, char ** argv) {
         LOG_DBG("Current diffs: %s\n", string_from(ctx, diffs).c_str());
 
         // look for deletions in draft
-        const int64_t match_del = draft_delete_match(draft, diffs, draft_min);
-        if (match_del >= 0) {
-            draft.erase(draft.begin(), draft.begin() + match_del);
+        const int64_t match_idx = draft_match_index(draft, diffs, draft_min);
+        if (match_idx >= 0) {
+            draft.erase(draft.begin(), draft.begin() + match_idx);
             diffs.clear();
             use_draft = true;
             batch_idx = -1;
             n_accept += draft_min;
         }
 
-        // look for insertions in draft
-        const int64_t match_ins = draft_insert_match(draft, diffs, draft_min);
-        if (match_ins >= 0) {
-            draft.erase(draft.begin(), draft.begin() + match_ins);
-            diffs.clear();
-            use_draft = true;
-            batch_idx = -1;
-            n_accept += draft_min;
-        }
-
-        LOG_DBG("match_del: %d, match_ins: %d\n", (int) match_del, (int) match_ins);
+        LOG_DBG("match_idx: %d\n", (int) match_idx);
 
         // generate new logits if needed
         if (use_draft) {
