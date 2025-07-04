@@ -2,6 +2,7 @@
 #include "common.h"
 #include "sampling.h"
 #include "speculative.h"
+#include "chat.h"
 #include "log.h"
 #include "llama.h"
 
@@ -17,7 +18,9 @@ int64_t draft_match_index(
     int64_t match_length
 );
 
-// this looks for suffixes of diffs that can start anywhere in draft
+std::string common_get_prompt(const common_params & params, const struct common_chat_templates * chat_templates);
+
+// this looks for diffs that can start anywhere in draft
 int64_t draft_match_index(
     const std::deque<llama_token> & draft_tokens,
     const std::deque<llama_token> & diffs_tokens,
@@ -50,10 +53,47 @@ int64_t draft_match_index(
     return -1;
 }
 
+// chat template support from main.cpp
+std::string common_get_prompt(const common_params & params, const struct common_chat_templates * chat_templates) {
+    std::vector<common_chat_msg> chat_msgs;
+
+    if (params.enable_chat_template) {
+        // format the system prompt (will use template default if empty)
+        if (!params.system_prompt.empty()) {
+            common_chat_msg new_msg;
+            new_msg.role = "system";
+            new_msg.content = params.system_prompt;
+            common_chat_format_single(chat_templates, chat_msgs, new_msg, false, params.use_jinja);
+            chat_msgs.push_back(new_msg);
+        }
+
+        // format and append the user prompt
+        if (!params.prompt.empty()) {
+            common_chat_msg new_msg;
+            new_msg.role = "user";
+            new_msg.content = params.prompt;
+            common_chat_format_single(chat_templates, chat_msgs, new_msg, true, params.use_jinja);
+            chat_msgs.push_back(new_msg);
+        }
+
+        // apply the chat template
+        if (!params.system_prompt.empty() || !params.prompt.empty()) {
+            common_chat_templates_inputs inputs;
+            inputs.use_jinja = params.use_jinja;
+            inputs.messages = chat_msgs;
+            inputs.add_generation_prompt = !params.prompt.empty();
+            return common_chat_templates_apply(chat_templates, inputs).prompt;
+        }
+    }
+
+    // otherwise use the prompt as is
+    return params.prompt;
+}
+
 int main(int argc, char ** argv) {
     common_params params;
 
-    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_SPECULATIVE)) {
+    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_PREDICTED)) {
         return 1;
     }
 
@@ -79,9 +119,12 @@ int main(int argc, char ** argv) {
 
     const llama_vocab * vocab = llama_model_get_vocab(model);
 
-    // Tokenize the prompt
-    std::vector<llama_token> inp;
-    inp = common_tokenize(ctx, params.prompt, true, true);
+    // tokenize the prompt
+    auto chat_templates = common_chat_templates_init(model, params.chat_template);
+    std::string prompt = common_get_prompt(params, chat_templates.get());
+    std::vector<llama_token> inp = common_tokenize(ctx, prompt, true, true);
+
+    LOG_DBG("prompt: %s\n", prompt.c_str());
 
     if (inp.empty()) {
         LOG_ERR("%s: the prompt is empty\n", __func__);
