@@ -131,6 +131,7 @@ int main(int argc, char ** argv) {
 
     // track stats
     int n_accept = 0;
+    int n_logits = 0;
 
     // generation state
     int n_past = n_prompt - 1;
@@ -190,6 +191,7 @@ int main(int argc, char ** argv) {
 
                 // update generation state
                 batch_idx = 0;
+                n_logits += draft_size + 1;
 
                 LOG_DBG("decoded batch [idx: %d]: %s\n", batch_idx, string_from(ctx, batch).c_str());
             } else {
@@ -203,6 +205,7 @@ int main(int argc, char ** argv) {
 
             // update generation state
             batch_idx = 0;
+            n_logits++;
         }
 
         // sample from the target model
@@ -263,6 +266,7 @@ int main(int argc, char ** argv) {
 
     LOG_INF("\n");
     LOG_INF("n_draft   = %d\n", n_draft);
+    LOG_INF("n_logits  = %d\n", n_logits);
     LOG_INF("n_accept  = %d\n", n_accept);
 
     LOG_INF("\n");
