@@ -13,14 +13,14 @@
 
 int64_t draft_match_index(
     const std::deque<llama_token> & draft_tokens,
-    const std::vector<llama_token> & diffs_tokens,
+    const std::deque<llama_token> & diffs_tokens,
     int64_t match_length
 );
 
 // this looks for suffixes of diffs that can start anywhere in draft
 int64_t draft_match_index(
     const std::deque<llama_token> & draft_tokens,
-    const std::vector<llama_token> & diffs_tokens,
+    const std::deque<llama_token> & diffs_tokens,
     int64_t match_length
 ) {
     // get array sizes
@@ -139,12 +139,11 @@ int main(int argc, char ** argv) {
     int batch_idx = -1;
 
     // tokens: all prompt + generated tokens
-    llama_tokens tokens(inp);
+    std::vector<llama_token> tokens(inp);
     tokens.reserve(llama_n_ctx(ctx));
 
     // prefix: tokens since last match
-    llama_tokens diffs;
-    diffs.reserve(llama_n_ctx(ctx));
+    std::deque<llama_token> diffs;
 
     // batch for evaluating the model
     const int draft_size0 = std::min(draft_max, (int) llama_n_batch(ctx) - 1);
@@ -158,10 +157,11 @@ int main(int argc, char ** argv) {
         }
 
         std::vector<llama_token> draft_copy(draft.begin(), draft.end());
+        std::vector<llama_token> diffs_copy(diffs.begin(), diffs.end());
         LOG_DBG("n_past: %d, use_draft: %d, batch_idx: %d\n", n_past, use_draft, batch_idx);
         LOG_DBG("id_last: %s\n", common_token_to_piece(ctx, id_last).c_str());
         LOG_DBG("Current draft: %s\n", string_from(ctx, draft_copy).c_str());
-        LOG_DBG("Current diffs: %s\n", string_from(ctx, diffs).c_str());
+        LOG_DBG("Current diffs: %s\n", string_from(ctx, diffs_copy).c_str());
 
         // look for deletions in draft
         const int64_t match_idx = draft_match_index(draft, diffs, draft_min);
@@ -240,6 +240,9 @@ int main(int argc, char ** argv) {
         // if we're not in draft mode, update diffs tokens
         if (!use_draft) {
             diffs.push_back(id_last);
+            if ((int) diffs.size() > draft_min) {
+                diffs.pop_front();
+            }
         }
 
         // are we out of draft tokens?
