@@ -2,6 +2,10 @@
 
 Demonstration of predicted output generation with recovery. See `patch.sh` for an example and `specul.sh` for comparison with draft models.
 
+# Todo
+
+Use `common_ngram_hash_function` to index the draft, mapping from n-grams to lists of positions. Then track `draft_pos` so that we can reject positions that have been dropped already.
+
 # Algorithm
 
 - `n_past`: cumulative number of tokens for which logits have been computed
