@@ -15,4 +15,4 @@ SYSTEM="You are an assistant that makes changes to code. You are given a code sn
 
 PROMPT="${SYSTEM}\n\nPROMPT: ${QUERY}\n\nCODE:\n${CODE}\n\n"
 
-$BIN -m $MODEL -c 0 -ngl 99 -fa --color --prompt "${PROMPT}"
+$BIN -m $MODEL -c 4096 -ngl 99 -fa --color --prompt "${PROMPT}" --draft-min 5 --draft-max 32
