@@ -180,8 +180,8 @@ int main(int argc, char ** argv) {
     const auto t_dec_start = ggml_time_us();
 
     // track stats
-    int n_accept = 0;
     int n_logits = 0;
+    int n_accept = 0;
 
     // generation state
     int n_past = n_prompt - 1;
@@ -204,7 +204,7 @@ int main(int argc, char ** argv) {
     // loop through (successfully) generated tokens
     for (;; n_past++) {
         // we've hit the generation limit
-        if (params.n_predict >= 0 && n_past >= params.n_predict) {
+        if (params.n_predict >= 0 && n_past >= n_prompt + params.n_predict) {
             break;
         }
 
@@ -313,7 +313,7 @@ int main(int argc, char ** argv) {
     LOG("\n\n");
 
     LOG_INF("encoded %4d tokens in %8.3f seconds, speed: %8.3f t/s\n", n_prompt,   (t_enc_end - t_enc_start) / 1e6f, n_prompt / ((t_enc_end - t_enc_start) / 1e6f));
-    LOG_INF("decoded %4d tokens in %8.3f seconds, speed: %8.3f t/s\n", n_past, (t_dec_end - t_dec_start) / 1e6f, n_past  / ((t_dec_end - t_dec_start) / 1e6f));
+    LOG_INF("decoded %4d tokens in %8.3f seconds, speed: %8.3f t/s\n", n_past - n_prompt, (t_dec_end - t_dec_start) / 1e6f, (n_past - n_prompt) / ((t_dec_end - t_dec_start) / 1e6f));
 
     LOG_INF("\n");
     LOG_INF("n_draft   = %d\n", n_draft);
