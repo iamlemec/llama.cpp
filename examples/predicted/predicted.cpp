@@ -21,6 +21,12 @@ common_draft_index index_draft_tokens(
     int64_t match_length
 );
 
+int64_t find_draft_match(
+    common_ngram & ngram_key,
+    common_draft_index & draft_index,
+    int64_t draft_pos
+);
+
 // chat template support from main.cpp
 std::string common_get_prompt(const common_params & params, const struct common_chat_templates * chat_templates) {
     std::vector<common_chat_msg> chat_msgs;
@@ -75,6 +81,22 @@ common_draft_index index_draft_tokens(
         }
     }
     return index;
+}
+
+int64_t find_draft_match(
+    common_ngram & ngram_key,
+    common_draft_index & draft_index,
+    int64_t draft_pos
+) {
+    auto it = draft_index.find(ngram_key);
+    if (it != draft_index.end()) {
+        for (int64_t match_idx : it->second) {
+            if (match_idx >= draft_pos) {
+                return match_idx;
+            }
+        }
+    }
+    return -1;
 }
 
 int main(int argc, char ** argv) {
@@ -193,20 +215,15 @@ int main(int argc, char ** argv) {
 
         // look for earliest match in the current draft
         if (!use_draft && (int) ngram.size() >= draft_min) {
-            const common_ngram ngram_key(ngram.data(), draft_min);
-            auto it = draft_index.find(ngram_key);
-            if (it != draft_index.end()) {
-                for (int64_t match_idx : it->second) {
-                    if (match_idx >= draft_pos) {
-                        draft_pos = match_idx + draft_min;
-                        ngram.clear();
-                        use_draft = true;
-                        batch_idx = -1;
-                        n_accept += draft_min;
-                        LOG_DBG("draft_pos: %d\n", draft_pos);
-                        break;
-                    }
-                }
+            common_ngram ngram_key(ngram.data(), draft_min);
+            const int64_t match_idx = find_draft_match(ngram_key, draft_index, draft_pos);
+            if (match_idx >= 0) {
+                draft_pos = match_idx + draft_min;
+                ngram.clear();
+                use_draft = true;
+                batch_idx = -1;
+                n_accept += draft_min;
+                LOG_DBG("draft_pos: %d\n", draft_pos);
             }
         }
 
