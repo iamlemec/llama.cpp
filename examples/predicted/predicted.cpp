@@ -12,23 +12,23 @@
 #include <string>
 #include <vector>
 
-typedef std::unordered_map<common_ngram, std::vector<int64_t>, common_ngram_hash_function> common_draft_index;
+typedef std::unordered_map<common_ngram, std::vector<int64_t>, common_ngram_hash_function> draft_index_t;
 
-std::string common_get_prompt(const common_params & params, const struct common_chat_templates * chat_templates);
+std::string get_chat_prompt(const common_params & params, const struct common_chat_templates * chat_templates);
 
-common_draft_index index_draft_tokens(
+draft_index_t make_draft_index(
     std::vector<llama_token> & draft_tokens,
     int64_t match_length
 );
 
 int64_t find_draft_match(
     common_ngram & ngram_key,
-    common_draft_index & draft_index,
+    draft_index_t & draft_index,
     int64_t draft_pos
 );
 
 // chat template support from main.cpp
-std::string common_get_prompt(const common_params & params, const struct common_chat_templates * chat_templates) {
+std::string get_chat_prompt(const common_params & params, const struct common_chat_templates * chat_templates) {
     std::vector<common_chat_msg> chat_msgs;
 
     if (params.enable_chat_template) {
@@ -65,11 +65,11 @@ std::string common_get_prompt(const common_params & params, const struct common_
 }
 
 // index the draft into a {hash: [pos]} map
-common_draft_index index_draft_tokens(
+draft_index_t make_draft_index(
     std::vector<llama_token> & draft_tokens,
     int64_t match_length
 ) {
-    common_draft_index index;
+    draft_index_t index;
     int64_t draft_size = (int64_t) draft_tokens.size();
     for (int64_t i = 0; i < draft_size - match_length + 1; i++) {
         const common_ngram ngram_key(draft_tokens.data() + i, match_length);
@@ -85,7 +85,7 @@ common_draft_index index_draft_tokens(
 
 int64_t find_draft_match(
     common_ngram & ngram_key,
-    common_draft_index & draft_index,
+    draft_index_t & draft_index,
     int64_t draft_pos
 ) {
     auto it = draft_index.find(ngram_key);
@@ -130,7 +130,7 @@ int main(int argc, char ** argv) {
 
     // tokenize the prompt
     auto chat_templates = common_chat_templates_init(model, params.chat_template);
-    std::string prompt = common_get_prompt(params, chat_templates.get());
+    std::string prompt = get_chat_prompt(params, chat_templates.get());
     std::vector<llama_token> inp = common_tokenize(ctx, prompt, true, true);
 
     LOG_DBG("prompt: %s\n", prompt.c_str());
@@ -164,7 +164,7 @@ int main(int argc, char ** argv) {
     // draft text to use for prediction
     std::string draft_text = params.speculative.text;
     std::vector<llama_token> draft = common_tokenize(ctx, draft_text, false, true);
-    common_draft_index draft_index = index_draft_tokens(draft, draft_min);
+    draft_index_t draft_index = make_draft_index(draft, draft_min);
     const int n_draft = draft.size();
 
     const auto t_enc_start = ggml_time_us();
